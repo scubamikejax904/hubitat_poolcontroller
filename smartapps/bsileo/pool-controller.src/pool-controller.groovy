@@ -4,7 +4,7 @@
  *  Copyright 2020 Brad Sileo
  *
  *
- *  version: 0.9.7
+ *  version: 0.1.0 SMJ
  */
 definition(
 		name: "Pool Controller",
@@ -83,47 +83,94 @@ def describeInstall() {
 
 // UPNP Device Discovery Code
 def deviceDiscovery() {
-    atomicState.config=false
-    ssdpSubscribe()
-    ssdpDiscover()
-	//log.debug("Check Manual device?-- IP:${controllerIP}:${controllerPort}=${controllerMac}")
-    if (controllerIP && controllerPort && controllerMac) {
-        def cleanMac = controllerMac.toLowerCase().replaceAll(':','').replaceAll('-','')
-        if (!state.devices[cleanMac]) {
-            log.debug("Add Manual device-- IP:${controllerIP}:${controllerPort}=${controllerMac}")
-            state.devices[cleanMac] = [
-        				ipaddress:controllerIP,
-                        port:controllerPort,
-                        verified:false,
-                        mac:controllerMac,
-                        hub:"",
-                        ssdpPath:"/upnp.xml",
-                        ssdpTerm:"urn:schemas-tagyoureit-org:device:PoolController:1",
-                        name:"",
-                        ssdpNTS:"",
-                        uuid:"",
-                        mode:"",
-                        ssdpUSN:"uuid:806f52f4-1f35-4e33-9299-b827eb3bb77a::urn:schemas-tagyoureit-org:device:PoolController:1"
-        				]
-        }
+    atomicState.config = false
 
+    def devices = getDevices()
+
+    /*
+     * Manual configuration.
+     * When supplied, don't use SSDP at all.
+     */
+    if (controllerIP && controllerPort && controllerMac) {
+
+        def cleanMac = controllerMac
+            .toLowerCase()
+            .replaceAll(':', '')
+            .replaceAll('-', '')
+
+        log.debug("Manual controller supplied: ${controllerIP}:${controllerPort} ${controllerMac}")
+
+        devices[cleanMac] = [
+            ipaddress: controllerIP,
+            port: controllerPort.toString(),
+            verified: true,
+            mac: controllerMac,
+            hub: "",
+            ssdpPath: "/upnp.xml",
+            ssdpTerm: "urn:schemas-tagyoureit-org:device:PoolController:1",
+            name: "njsPC",
+            ssdpNTS: "",
+            uuid: "",
+            mode: "",
+            ssdpUSN: ""
+        ]
+
+        atomicState.devices = devices
+        state.devices = devices
+
+        log.info("Manual Pool Controller marked verified: ${controllerIP}:${controllerPort} (${controllerMac})")
+
+    } else {
+
+        /*
+         * No manual controller supplied, so use normal SSDP discovery.
+         */
+        ssdpSubscribe()
+        ssdpDiscover()
+
+        verifyDevices()
     }
-    verifyDevices()
-    return dynamicPage(name: "deviceDiscovery", title: "Locate Pool Controller...", nextPage: "selectDevice", refreshInterval: 2, install: false, uninstall: true) {
-        section("Please wait while we discover your nodejs-poolController. Discovery can take some time...\n\r Click next to proceed once you see the device you want to connect to in the verified section below:", hideable:false, hidden:false) {
-            paragraph "${ state.isHE ? '<h2>' : ''}Discovered devices:${ state.isHE ? '</h2>' : ''}"
+
+    return dynamicPage(
+        name: "deviceDiscovery",
+        title: "Locate Pool Controller...",
+        nextPage: "selectDevice",
+        refreshInterval: 2,
+        install: false,
+        uninstall: true
+    ) {
+        section(
+            "Please wait while we discover your nodejs-poolController. Discovery can take some time...\n\r Click next to proceed once you see the device you want to connect to in the verified section below:",
+            hideable: false,
+            hidden: false
+        ) {
+            paragraph "${state.isHE ? '<h2>' : ''}Discovered devices:${state.isHE ? '</h2>' : ''}"
             paragraph describeUnverifiedDevices()
 
-            paragraph "${ state.isHE ? '<h2>' : ''}Verifed devices:${state.isHE ? '</h2>' : ''}"
+            paragraph "${state.isHE ? '<h2>' : ''}Verified devices:${state.isHE ? '</h2>' : ''}"
             paragraph describeDevices()
-            paragraph "(Verified devices are ready to be selected and installed on the next page)"
-            if (state.isHE) { input "refreshDiscovery", "button", title: "Refresh" }
 
-	    }
-        section("Manual poolController Configuration", hideable:true, hidden:false) {
-            href(name: "manualPage", title: "", description: "Tap to manually enter a controller (Optional, if discovery does not work above)", required: false, page: "manualPage")
+            paragraph "(Verified devices are ready to be selected and installed on the next page)"
+
+            if (state.isHE) {
+                input "refreshDiscovery", "button", title: "Refresh"
+            }
         }
-	}
+
+        section(
+            "Manual poolController Configuration",
+            hideable: true,
+            hidden: false
+        ) {
+            href(
+                name: "manualPage",
+                title: "",
+                description: "Tap to manually enter a controller (Optional, if discovery does not work above)",
+                required: false,
+                page: "manualPage"
+            )
+        }
+    }
 }
 
 def appButtonHandler(btn) {
@@ -423,15 +470,25 @@ def getVerifiedDevices() {
 }
 
 def getDevices() {
-	if (!atomicState.devices) {
+    if (!(atomicState.devices instanceof Map)) {
         log.debug("RESET AS DEVICES")
-		atomicState.devices = [:]
-	}
-    if (!state.devices) {
+        atomicState.devices = [:]
+    }
+
+    if (!(state.devices instanceof Map)) {
         log.debug("RESET DEVICES")
-		state.devices = [:]
-	}
-	return state.devices
+        state.devices = [:]
+    }
+
+    // Keep the two device stores synchronized.
+    if (atomicState.devices && !state.devices) {
+        state.devices = atomicState.devices
+    }
+    else if (state.devices && !atomicState.devices) {
+        atomicState.devices = state.devices
+    }
+
+    return atomicState.devices
 }
 
 def verifyDevices() {
@@ -502,8 +559,8 @@ def deviceDescriptionHandler(hubResponse) {
             log.debug(cleanUDN.contains(cleanKey))
             return cleanUDN.contains(cleanKey)
         }
-        log.info("VERYFY ${device.key} - ${body}")
         if (device) {
+            log.info("VERIFY ${device.key} - ${body}")
             device.value << [name: body?.device?.friendlyName?.text(), model:body?.device?.modelName?.text(), serialNumber:body?.device?.serialNum?.text(), verified: true]
             device.value.verified = true
             log.info("Verified a device - device.value == ${device}")
