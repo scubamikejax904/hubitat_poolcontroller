@@ -5,7 +5,7 @@
  *
  *  Author: Brad Sileo
  *
- *  Version: "1.15"
+ *  Version: "1.2 SMJ"
  *
  */
 
@@ -244,8 +244,6 @@ def manageFeatureCircuits() {
 }
 
 def manageCircuits() {
-  	def namespace = 'hubitat'
-    def deviceType = "Generic Component Switch"
     def circuits = state.circuits
     circuits.each {data ->
         if (data.friendlyName == "NOT USED") return
@@ -255,33 +253,30 @@ def manageCircuits() {
             try {
                 def auxButton = getChild("circuit",data.id)
                 if (!auxButton) {
-                	log.info "Create Circuit switch ${auxLabel} Named=${auxname}"
-                    auxButton = addHESTChildDevice(namespace,deviceType, getChildDNI("circuit",data.id),
-                            [
-                                completedSetup: true,
-                                label: auxLabel,
-                                isComponent:false,
-                                componentName: auxname,
-                                componentLabel: auxLabel,
-                                typeID: data.type.toString(),
-                                circuitID: data.id.toString()
-                             ])
-                    logger( "Success - Created switch ${auxname}" ,"debug")
-                }
-                else {
+                    // CHECK: Is this an IntelliBrite light?
+                    if (data.type?.name == "intellibrite" || data.type?.theme == "intellibrite") {
+                        auxButton = addHESTChildDevice("bsileo", "Pool Controller IntelliBrite", getChildDNI("circuit",data.id),
+                            [ completedSetup: true, label: auxLabel, isComponent: false, componentName: auxname, componentLabel: auxLabel, typeID: data.type.toString(), circuitID: data.id.toString() ])
+                        logger("Success - Created IntelliBrite Light ${auxname}","info")
+                    } else {
+                        // Existing logic for standard circuits
+                        def namespace = 'hubitat'
+                        def deviceType = "Generic Component Switch"
+                        auxButton = addHESTChildDevice(namespace, deviceType, getChildDNI("circuit",data.id),
+                            [ completedSetup: true, label: auxLabel, isComponent: false, componentName: auxname, componentLabel: auxLabel, typeID: data.type.toString(), circuitID: data.id.toString() ])
+                        logger("Success - Created switch ${auxname}","debug")
+                    }
+                } else {
                     auxButton.updateDataValue("typeID",data.type.toString())
                     auxButton.updateDataValue("circuitID",data.id.toString())
                     logger("Found existing Circuit for ${data.name} and updated it","info")
                 }
-            }
-            catch(e)
-            {
-                logger( "Failed to create Pool Controller Circuit for ${data.name}" + e ,"error")
+            } catch(e) {
+                logger("Failed to create Pool Controller Circuit for ${data.name}: ${e}","error")
             }
         }
     }
 }
-
 
 def manageChlorinators() {
     def chlors = state.chlorinators
@@ -628,10 +623,8 @@ def parseDevice(section,type) {
 def parseCircuit(msg) {
     logger("Parsing circuit - ${msg}","debug")
     def child = getChild("circuit",msg.id)
-    logger("Parsing circuit ${child}")
     if (child) {
-        def val = msg.isOn ? "on": "off"
-        child.parse([[name:"switch",value: val, descriptionText: "Status changed from controller to ${val}" ]])
+        child.parse(msg) // The child driver handles extracting isOn and lightingTheme
     }
 }
 
@@ -756,6 +749,46 @@ def setCircuitCallback(response, data=null) {
     } else {
         logger("Ciurcuit update failed with code ${response.getStatus()}","error")
     }
+}
+// **********************************
+// IntelliBrite Theme Control
+// **********************************
+def componentSetTheme(device, themeName) {
+    logger("Got SET THEME Request from ${device} for ${themeName}","debug")
+    def id = childCircuitID(device)
+    def themeVal = getThemeValFromName(themeName)
+    
+    if (themeVal != null && id != null) {
+        sendPut("/state/circuit/setTheme", setThemeCallback, [id: id, lightingTheme: [val: themeVal]], [id: id, themeName: themeName, device: device])
+    } else {
+        logger("Failed to resolve theme '${themeName}' or circuit ID for ${device}","error")
+    }
+}
+
+def setThemeCallback(response, data=null) {
+    if (response.getStatus() == 200) {
+        logger("Theme update Succeeded for ${data?.themeName}","info")
+        // Force an immediate state refresh to get the updated theme from njsPC
+        sendGet("/state/circuit/${data?.id}", parseCircuitRefresh)
+    } else {
+        logger("Theme update failed with code ${response.getStatus()}","error")
+    }
+}
+
+def parseCircuitRefresh(response, data=null) {
+    if (response.getStatus() == 200) {
+        parseCircuit(response.getJson())
+    }
+}
+
+def getThemeValFromName(String name) {
+    def themes = [
+        "white": 0, "lightgreen": 1, "green": 2, "cyan": 3,
+        "red": 4, "magenta": 5, "blue": 6, "lavender": 7,
+        "colorsync": 8, "american": 9, "california": 10, 
+        "colorset": 11, "colorrecall": 12, "colorswim": 13
+    ]
+    return themes[name?.toLowerCase()]
 }
 
 // **********************************
